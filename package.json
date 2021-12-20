@@ -1,6 +1,11 @@
 {
   "name": "rdsex",
   "version": "0.0.1",
+  "description": "expand redis function with lua script",
+  "keywords": [
+    "redis",
+    "ioredis"
+  ],
   "license": "ISC",
   "author": "yxjorhs",
   "main": "dist/index.js",

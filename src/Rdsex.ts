@@ -137,7 +137,7 @@ class Rdsex {
 
   /**
    * incr {key} with {increment}, limit result between {minVal} and
-   * {maxVal}
+   * {maxVal}, return number while success, otherwise return null
    * @param {string} key
    * @param {number} increament
    * @param {number} minVal
@@ -157,7 +157,7 @@ class Rdsex {
 
   /**
    * hincr {key} {field} with {increment}, limit result between {minVal} and
-   * {maxVal}
+   * {maxVal}, return number while success, otherwise return null
    * @param {string} key
    * @param {string} field
    * @param {number} increament
@@ -185,8 +185,8 @@ class Rdsex {
   }
 
   /**
-   * zincr {key} {member} with {increment}, limit resultbetween {minVal} and
-   * {maxVal}
+   * zincr {key} {member} with {increment}, limit result between {minVal} and
+   * {maxVal}, return number while success, otherwise return null
    * @param {string} key
    * @param {string} member
    * @param {number} increament
