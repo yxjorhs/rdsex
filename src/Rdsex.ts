@@ -1,138 +1,20 @@
-import IORedis from "ioredis";
-
-type LuaName = 'incrBetween' | 'hincrBetween' | 'zincrBetween'
-type RdsExpand<T extends LuaName, R> = Record<T, (...p: (string | number | undefined)[]) => Promise<R>>
-type Rds = IORedis.Redis & RdsExpand<'incrBetween', number | null> &
-  RdsExpand<'hincrBetween', number | null> &
-  RdsExpand<'zincrBetween', number | null>
-
-const LUA_INCRBETWEEN = `
-local key = KEYS[1]
-local increament = tonumber(ARGV[1])
-local minVal = tonumber(ARGV[2])
-local maxVal = tonumber(ARGV[3])
-local pexpireAt = ARGV[4]
-
-local currVal = redis.call("get", key)
-
-local newVal = increament
-if (currVal) then
-  newVal = newVal + tonumber(currVal)
-end
-
-if (newVal < minVal) then
-  return nil
-end
-
-if (newVal > maxVal) then
-  return nil
-end
-
-newVal = tonumber(redis.call("incrby", key, increament))
-
-if (pexpireAt ~= "") then
-  redis.call('pexpireat', key, tonumber(pexpireAt))
-end
-
-return newVal
-`;
-const LUA_HINCRBETWEEN = `
-local key = KEYS[1]
-local field = ARGV[1]
-local increament = tonumber(ARGV[2])
-local minVal = tonumber(ARGV[3])
-local maxVal = tonumber(ARGV[4])
-local pexpireAt = ARGV[5]
-
-local currVal = redis.call("hget", key, field)
-
-local newVal = increament
-if (currVal) then
-  newVal = newVal + tonumber(currVal)
-end
-
-if (newVal < minVal) then
-  return nil
-end
-
-if (newVal > maxVal) then
-  return nil
-end
-
-newVal = tonumber(redis.call("hincrby", key, field, increament))
-
-if (pexpireAt ~= "") then
-  redis.call('pexpireat', key, tonumber(pexpireAt))
-end
-
-return newVal
-`;
-const LUA_ZINCRBETWEEN = `
-local key = KEYS[1]
-local member = ARGV[1]
-local increament = tonumber(ARGV[2])
-local minVal = tonumber(ARGV[3])
-local maxVal = tonumber(ARGV[4])
-local pexpireAt = ARGV[5]
-
-local currVal = redis.call("zscore", key, member)
-
-local newVal = increament
-if (currVal) then
-  newVal = newVal + tonumber(currVal)
-end
-
-if (newVal < minVal) then
-  return nil
-end
-
-if (newVal > maxVal) then
-  return nil
-end
-
-newVal = tonumber(redis.call("zincrby", key, increament, member))
-
-if (pexpireAt ~= "") then
-  redis.call('pexpireat', key, tonumber(pexpireAt))
-end
-
-return newVal
-`;
-
-const luaDict: Record<LuaName, [number, string]> = {
-  incrBetween: [1, LUA_INCRBETWEEN],
-  hincrBetween: [1, LUA_HINCRBETWEEN],
-  zincrBetween: [1, LUA_ZINCRBETWEEN],
-};
+import assert from "assert";
+import lua from "./lua";
 
 /**
- * redis expand
+ * redis expand function with lua scripts
  */
 class Rdsex {
-  private readonly redis: Rds
+  /** store lua script sha */
+  private shaStore = new Map<keyof typeof lua, string>()
 
   /**
-   * @param {IORedis.Redis | IORedis.Cluster} redis redis instance
+   * @param {Rdsex.RedisLike} redis redis instance
    */
   constructor(
-      redis: IORedis.Redis | IORedis.Cluster,
+      readonly redis: Rdsex.RedisLike,
   ) {
-    this.defineCommand(redis);
-    this.redis = redis as Rds;
-  }
-
-  /**
-   * define command
-   * @param {IORedis.Redis | IORedis.Cluster} redis
-   */
-  private async defineCommand(redis: IORedis.Redis | IORedis.Cluster) {
-    for (const key of Object.keys(luaDict)) {
-      const [numberOfKeys, lua] = luaDict[key as LuaName];
-      redis.defineCommand(key, {
-        numberOfKeys,
-        lua,
-      });
-    }
+    this.scriptLoadAll()
   }
 
   /**
@@ -151,8 +33,12 @@ class Rdsex {
       minVal: number,
       maxVal: number,
       pexpireAt?: number,
-  ) {
-    return this.redis.incrBetween(key, increament, minVal, maxVal, pexpireAt);
+  ): Promise<number | null> {
+    return this.evalsha(
+      await this.shaGet('incrBetween'),
+      [key],
+      [increament, minVal, maxVal, pexpireAt]
+    );
   }
 
   /**
@@ -173,14 +59,17 @@ class Rdsex {
       minVal: number,
       maxVal: number,
       pexpireAt?: number,
-  ) {
-    return this.redis.hincrBetween(
-        key,
-        field,
-        increament,
-        minVal,
-        maxVal,
-        pexpireAt,
+  ): Promise<number | null> {
+    return this.evalsha(
+        await this.shaGet('hincrBetween'),
+        [key],
+        [
+          field,
+          increament,
+          minVal,
+          maxVal,
+          pexpireAt,
+        ]
     );
   }
 
@@ -202,49 +91,87 @@ class Rdsex {
       minVal: number,
       maxVal: number,
       pexpireAt?: number,
-  ) {
-    return this.redis.zincrBetween(
-        key,
-        member,
-        increament,
-        minVal,
-        maxVal,
-        pexpireAt,
+  ): Promise<number | null> {
+    return this.evalsha(
+        await this.shaGet('zincrBetween'),
+        [key],
+        [
+          member,
+          increament,
+          minVal,
+          maxVal,
+          pexpireAt,
+        ]
     );
   }
 
-  /**
-   * lpush {member} to {key}, and exec ltrim, limit list {maxLen}
-   * @param {string} key
-   * @param {string} member
-   * @param {number} maxLen
-   */
-  public async lpushTrim(
-      key: string,
-      member: string | number,
-      maxLen: number,
-  ) {
-    await this.redis.pipeline()
-        .lpush(key, member)
-        .ltrim(key, 0, maxLen - 1)
-        .exec();
+  private async evalsha(
+    sha: string,
+    keys?: string[],
+    args?: any[]
+  ): Promise<any> {
+    let ret: any | undefined
+    keys = keys || []
+    args = args || []
+
+    ret = this.redis.evalSha && await this.redis.evalSha(sha, {
+      keys,
+      arguments: args.map(v => {
+        if (v === undefined || v === null) return ''
+        if (typeof v === 'number') return v.toString()
+        return v
+      })
+    })
+
+    if (ret !== undefined) return ret
+
+    ret = this.redis.evalsha && await this.redis.evalsha(sha, keys.length, ...keys, ...args)
+
+    assert(ret !== undefined, 'evalsha fail' )
+
+    return ret
   }
 
-  /**
-   * rpush {member} to {key}, and exec ltrim, limit list {maxLen}
-   * @param {string} key
-   * @param {string} member
-   * @param {number} maxLen
-   */
-  public async rpushTrim(
-      key: string,
-      member: string | number,
-      maxLen: number,
-  ) {
-    await this.redis.pipeline()
-        .rpush(key, member)
-        .ltrim(key, -maxLen, -1)
-        .exec();
+  private async scriptLoad(script: string): Promise<string> {
+    let ret: string | undefined
+
+    ret = this.redis.scriptLoad && await this.redis.scriptLoad(script)
+
+    if (ret !== undefined) return ret
+
+    ret = this.redis.script && await this.redis.script('load', script)
+
+    assert(ret !== undefined, 'script load fail')
+
+    return ret
+  }
+
+  private async scriptLoadAll() {
+    for (const key of Object.keys(lua) as (keyof typeof lua)[]) {
+      this.shaStore.set(key, await this.scriptLoad(lua[key]))
+    }
+  }
+
+  private async shaGet(key: keyof typeof lua) {
+    let ret = this.shaStore.get(key)
+
+    if (ret === undefined) {
+      this.shaStore.set(key, await this.scriptLoad(lua[key]))
+      ret = this.shaStore.get(key)
+    }
+
+    assert(ret !== undefined, `can not found sha by key`)
+
+    return ret
+  }
+}
+
+namespace Rdsex {
+  export type RedisLike = {
+    evalSha?: (sha: string, options?: { keys?: string[], arguments?: string[] }) => any,
+    evalsha?: (sha: string, numKeys: number, ...args: any[]) => Promise<any>,
+    scriptLoad?: (script: string) => Promise<string>,
+    script?: (...args: any[]) => Promise<any>,
   }
 }
 

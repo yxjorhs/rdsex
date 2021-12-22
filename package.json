@@ -21,9 +21,6 @@
     "eslint": "eslint src/**/*.ts",
     "eslint-fix": "eslint --fix src/**/*.ts"
   },
-  "dependencies": {
-    "ioredis": "^4.28.2"
-  },
   "devDependencies": {
     "@commitlint/cli": "^13.1.0",
     "@commitlint/config-conventional": "^13.1.0",
@@ -35,8 +32,10 @@
     "eslint": "^7.32.0",
     "eslint-config-google": "^0.14.0",
     "husky": "^7.0.1",
+    "ioredis": "^4.28.2",
     "mocha": "8.x",
     "nyc": "15.x",
+    "redis": "^4.0.1",
     "standard-version": "^9.1.1",
     "ts-node": "^9.1.1",
     "typescript": "^4.2.2"
